@@ -10,20 +10,21 @@ GRID_SIZE = GRID_WIDTH * GRID_HEIGHT
 X = 'X'
 O = 'O'
 EMPTY = '_'
-NUMBER_OF_GAMES = 2
-BASE_WIN_COUNTER = 10
+NUMBER_OF_GAMES = 1000000
+BASE_WIN_COUNTER = 1
 BASE_LOSS_COUNTER = 1
+BASE_DRAW_COUNTER = 1
 BASE_Q = 0
-EPSILON = 0
+EPSILON = 1
 GAMMA = 1
 ALPHA = 1
 STEP_REWARD = -0.1
 WIN_REWARD = 5
 LOSS_REWARD = -3
 DRAW_REWARD = -2
-SHOW_GAME = 1
+SHOW_GAME = 0
 #O
-
+array = [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10], [11, 12], [13, 14], [15, 16]]
 
 class Table:
     def __init__(self):
@@ -124,14 +125,6 @@ class RealPlayer:
         cell = self.table.grid[y][x]
         cell.type = self.char
         self.last_cell = cell
-  
- 
-# class StateNode:
-#     def __init__(self, hash, win_counter=BASE_WIN_COUNTER, loss_counter=BASE_LOSS_COUNTER):
-#         self.hash = hash
-#         self.next_states = []
-#         self.win_counter = win_counter
-#         self.loss_counter = loss_counter
         
         
 class QAgent(PrimalAgent):
@@ -139,7 +132,8 @@ class QAgent(PrimalAgent):
 
     def __init__(self, table, char, game, name='noname', epsilon=EPSILON, alpha=ALPHA, gamma=GAMMA, 
                  step_reward=STEP_REWARD, win_reward=WIN_REWARD, loss_reward=LOSS_REWARD, 
-                 draw_reward=DRAW_REWARD, base_win_counter=BASE_WIN_COUNTER, base_loss_counter=BASE_LOSS_COUNTER):
+                 draw_reward=DRAW_REWARD, base_win_counter=BASE_WIN_COUNTER, base_loss_counter=BASE_LOSS_COUNTER, 
+                 base_draw_counter=BASE_DRAW_COUNTER):
         super().__init__(table, char, name)
         self.game = game
         self.epsilon = epsilon
@@ -151,7 +145,8 @@ class QAgent(PrimalAgent):
         self.drow_reward = draw_reward
         self.base_win_counter = base_win_counter
         self.base_loss_counter = base_loss_counter
-        self.base_Q = base_win_counter / base_loss_counter
+        self.base_draw_counter = base_draw_counter
+        self.base_Q = base_win_counter - base_loss_counter
         self.actions = []
         if f'{self.name}_q_table' in globals():
             self.q_table = globals()[f'{self.name}_q_table']
@@ -175,7 +170,8 @@ class QAgent(PrimalAgent):
     def update_q_table(self, result):
         for action in self.actions:
             action[result] += 1
-            action['Q'] = action['win'] / action['loss']
+            action['Q'] = action['win'] - action['loss']
+            action['w/d'] = action['win'] // action['draw']
         
     def step(self, state):
         def get_coords(action_state):
@@ -210,11 +206,11 @@ class QAgent(PrimalAgent):
         if np.random.random() < self.epsilon:
             dirty_action_hash = np.random.choice(list(self.q_table[dirty_state_hash].keys()))
         else:
-            if SHOW_GAME:
-                print(self.q_table[dirty_state_hash])
             max_q = max([self.q_table[dirty_state_hash][action]['Q'] for action in self.q_table[dirty_state_hash]])
             dirty_action_hash = np.random.choice([action for action in self.q_table[dirty_state_hash] \
                 if self.q_table[dirty_state_hash][action]['Q'] == max_q])
+        if SHOW_GAME:
+                print(self.q_table[dirty_state_hash])
         # print(Q_max)
         self.actions.append(self.q_table[dirty_state_hash][dirty_action_hash])
         action_state = self.reverse_hash_and_get_state(dirty_action_hash, num)
@@ -241,6 +237,8 @@ class QAgent(PrimalAgent):
                     row[key] = '.'
                     actions[self.get_hash(state)] = {'win': self.base_win_counter, 
                                                      'loss': self.base_loss_counter, 
+                                                     'draw': self.base_draw_counter,
+                                                     'w/d': self.base_win_counter // self.base_draw_counter,
                                                      'Q': self.base_Q}
                     row[key] = EMPTY
         if not actions:
@@ -295,7 +293,7 @@ class QAgent(PrimalAgent):
 class Game:
     def __init__(self):
         self.table = Table()                                     #  RealPlayer(self.table, X)  RemoteAgent(self.table, X) 
-        self.player_X = RealPlayer(self.table, X)     #  QAgent(self.table, X, self, name='X')    PrimalAgent(self.table, X)
+        self.player_X = QAgent(self.table, X, self, name='X')     #  QAgent(self.table, X, self, name='X')    PrimalAgent(self.table, X)
         self.player_O = QAgent(self.table, O, self, name='X')    # PrimalAgent(self.table, O)  QAgent(self.table, O, self, name='O')
         self.players = [self.player_X, self.player_O]
         self.winner = None
@@ -363,7 +361,9 @@ class Game:
                         result = 'win'
                     else:
                         result = 'loss'
-                    player.update_q_table(result=result)
+                else:
+                    result = 'draw'
+                player.update_q_table(result=result)
                 player.actions = []
         
     def is_win(self, x, y):
