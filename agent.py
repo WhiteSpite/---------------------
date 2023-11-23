@@ -10,7 +10,7 @@ GRID_SIZE = GRID_WIDTH * GRID_HEIGHT
 X = 'X'
 O = 'O'
 EMPTY = '_'
-NUMBER_OF_GAMES = 1
+NUMBER_OF_GAMES = 10000
 BASE_Q = 0
 EPSILON = 0
 GAMMA = 1
@@ -19,7 +19,7 @@ STEP_REWARD = -0.1
 WIN_REWARD = 5
 LOSE_REWARD = -3
 DRAW_REWARD = -2
-SHOW_GAME = 1
+SHOW_GAME = 0
 #O
 
 
@@ -184,10 +184,9 @@ class QAgent(PrimalAgent):
         if self.game.move_counter == 9:
             return BASE_Q
         state = self.table.get_state()
-        mirror_state = self.mirror_state(state)
-        hash, num = self.find_or_create_state_in_q_table(mirror_state)
+        hash, num = self.find_or_create_state_in_q_table(state)
         # print(hash)
-        Q_max = -max(self.q_table[hash].values())
+        Q_max = max(self.q_table[hash].values())
         return Q_max
     
     def get_state_by_action_state(self, action_state):
@@ -285,8 +284,8 @@ class QAgent(PrimalAgent):
 class Game:
     def __init__(self):
         self.table = Table()                                     #  RealPlayer(self.table, X)  RemoteAgent(self.table, X) 
-        self.player_X = QAgent(self.table, X, self, name=X)     #  QAgent(self.table, X, self, name='X')    PrimalAgent(self.table, X)
-        self.player_O = QAgent(self.table, O, self, name=X)    # PrimalAgent(self.table, O)  QAgent(self.table, O, self, name='O')
+        self.player_X = QAgent(self.table, X, self, name='Z')     #  QAgent(self.table, X, self, name='X')    PrimalAgent(self.table, X)
+        self.player_O = QAgent(self.table, O, self, name='H')    # PrimalAgent(self.table, O)  QAgent(self.table, O, self, name='O')
         self.players = [self.player_X, self.player_O]
         self.winner = None
         self.move_counter = 0
@@ -309,7 +308,7 @@ class Game:
         print(self.player_O.alpha)
         
         for player in self.players:
-            if f'{player.name}_q_table' in globals() and player.__class__ is QAgent:
+            if player.__class__ is QAgent and f'{player.name}_q_table' in globals():
                 player.save_q_table()
                 del globals()[f'{player.name}_q_table']
         
@@ -327,7 +326,8 @@ class Game:
                     break
                 if self.move_counter == GRID_SIZE:
                     break
-                player.update_q_table(reward = player.step_reward)
+                if player.__class__ is QAgent:
+                    player.update_q_table(reward = player.step_reward)
             else:
                 continue
             break
@@ -358,8 +358,8 @@ class Game:
                 else:
                     reward = player.drow_reward
                 player.update_q_table(reward=reward)
-                if player.alpha:
-                    player.alpha -= 0.00001
+                # if player.alpha:
+                #     player.alpha -= 0.00001
         
     def is_win(self, x, y):
         def win_by_row(self, y):

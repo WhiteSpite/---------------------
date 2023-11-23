@@ -1,3 +1,10 @@
 import numpy as np  
-a = [1,2,3]
-print(--max(a))
+from timer import timer
+a = {}
+for i in range(100000000):
+    a[i] = i
+
+
+with timer():
+    for i in range(100000000):
+        a[0]
