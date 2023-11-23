@@ -1,10 +1,9 @@
 import numpy as np  
 from timer import timer
-a = {}
-for i in range(100000000):
-    a[i] = i
 
+a = {1: {2: {0: 1, 1: 2}}}
 
-with timer():
-    for i in range(100000000):
-        a[0]
+b = a[1][2]
+b[0]+=10
+
+print(a)
