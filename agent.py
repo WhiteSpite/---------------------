@@ -327,7 +327,7 @@ class Game:
                     break
                 if self.move_counter == GRID_SIZE:
                     break
-                # player.update_q_table(reward = player.step_reward)
+                player.update_q_table(reward = player.step_reward)
             else:
                 continue
             break
