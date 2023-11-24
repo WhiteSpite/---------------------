@@ -3,6 +3,7 @@ from os import listdir
 import pickle
 import requests
 import json
+from sklearn.cluster import KMeans
 
 GRID_WIDTH = 3  # Не менять
 GRID_HEIGHT = 3  # Не менять
@@ -10,12 +11,12 @@ GRID_SIZE = GRID_WIDTH * GRID_HEIGHT
 X = 'X'
 O = 'O'
 EMPTY = '_'
-NUMBER_OF_GAMES = 1000000
+NUMBER_OF_GAMES = 100000
 BASE_WIN_COUNTER = 1
 BASE_LOSS_COUNTER = 1
 BASE_DRAW_COUNTER = 1
 BASE_Q = 0
-EPSILON = 1
+EPSILON = 0
 GAMMA = 1
 ALPHA = 1
 STEP_REWARD = -0.1
@@ -23,8 +24,9 @@ WIN_REWARD = 5
 LOSS_REWARD = -3
 DRAW_REWARD = -2
 SHOW_GAME = 0
+STOP_LEARNING = 1
+TO_CLUSTER = 1
 #O
-array = [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10], [11, 12], [13, 14], [15, 16]]
 
 class Table:
     def __init__(self):
@@ -133,7 +135,7 @@ class QAgent(PrimalAgent):
     def __init__(self, table, char, game, name='noname', epsilon=EPSILON, alpha=ALPHA, gamma=GAMMA, 
                  step_reward=STEP_REWARD, win_reward=WIN_REWARD, loss_reward=LOSS_REWARD, 
                  draw_reward=DRAW_REWARD, base_win_counter=BASE_WIN_COUNTER, base_loss_counter=BASE_LOSS_COUNTER, 
-                 base_draw_counter=BASE_DRAW_COUNTER):
+                 base_draw_counter=BASE_DRAW_COUNTER, stop_learning=STOP_LEARNING, to_cluster=TO_CLUSTER):
         super().__init__(table, char, name)
         self.game = game
         self.epsilon = epsilon
@@ -147,16 +149,51 @@ class QAgent(PrimalAgent):
         self.base_loss_counter = base_loss_counter
         self.base_draw_counter = base_draw_counter
         self.base_Q = base_win_counter - base_loss_counter
+        self.stop_learning = stop_learning
+        self.to_cluster = to_cluster
         self.actions = []
+        # get q_table
         if f'{self.name}_q_table' in globals():
             self.q_table = globals()[f'{self.name}_q_table']
         elif f'{self.name}_q_table.pkl' in listdir():
             with open(f'{self.name}_q_table.pkl', 'rb') as f:
                 self.q_table = pickle.load(f)
             globals()[f'{self.name}_q_table'] = self.q_table
+            # self.q_table['clustered'] = False
         else:
-            self.q_table = dict()
+            self.q_table = {'clustered': False}
             globals()[f'{self.name}_q_table'] = self.q_table
+        # cluster q_table
+        if  self.stop_learning and self.to_cluster:
+            new_Q = []
+            all_actions = []
+            n_clasters = 28
+            
+            
+            import math
+            
+            
+            for hash in self.q_table:
+                if type(self.q_table[hash]) is not bool:
+                    for action in self.q_table[hash]:
+                        all_actions.append(self.q_table[hash][action])
+                        new_Q.append((self.q_table[hash][action]['win'] -
+                                      self.q_table[hash][action]['draw']/8) -
+                                      self.q_table[hash][action]['loss'])
+            print(len(set(new_Q)))
+            X = np.array(new_Q).reshape(-1, 1)
+            kmeans = KMeans(n_clusters=n_clasters).fit(X)
+            labels = kmeans.labels_
+            for i in labels:
+                print(i)
+            indexes = np.argsort(kmeans.cluster_centers_.squeeze())
+            lookup_table = np.zeros_like(indexes)
+            lookup_table[indexes] = np.arange(n_clasters)
+            ordered_labels = lookup_table[labels]
+            for action, label in zip(all_actions, ordered_labels):
+                action['Q'] = label
+            self.q_table['clustered'] = True
+              
         print(len(self.q_table))
         
     def move(self):
@@ -170,7 +207,7 @@ class QAgent(PrimalAgent):
     def update_q_table(self, result):
         for action in self.actions:
             action[result] += 1
-            action['Q'] = action['win'] - action['loss']
+            action['Q'] = action['win'] - (action['loss']**2)
             action['w/d'] = action['win'] // action['draw']
         
     def step(self, state):
@@ -238,7 +275,7 @@ class QAgent(PrimalAgent):
                     actions[self.get_hash(state)] = {'win': self.base_win_counter, 
                                                      'loss': self.base_loss_counter, 
                                                      'draw': self.base_draw_counter,
-                                                     'w/d': self.base_win_counter // self.base_draw_counter,
+                                                     'w/d': self.base_win_counter / self.base_draw_counter,
                                                      'Q': self.base_Q}
                     row[key] = EMPTY
         if not actions:
@@ -257,9 +294,11 @@ class QAgent(PrimalAgent):
         return state
     
     def save_q_table(self):
-        with open(f'{self.name}_q_table.pkl', 'wb') as f:
-            pickle.dump(self.q_table, f)
-            
+        if f'{self.name}_q_table' in globals() and (self.to_cluster or not self.stop_learning):
+            with open(f'{self.name}_q_table.pkl', 'wb') as f:
+                pickle.dump(self.q_table, f)
+            del globals()[f'{self.name}_q_table']
+        
     def mirror_state(self, state):
         for row in state:
             for key, type in enumerate(row):
@@ -293,8 +332,8 @@ class QAgent(PrimalAgent):
 class Game:
     def __init__(self):
         self.table = Table()                                     #  RealPlayer(self.table, X)  RemoteAgent(self.table, X) 
-        self.player_X = QAgent(self.table, X, self, name='X')     #  QAgent(self.table, X, self, name='X')    PrimalAgent(self.table, X)
-        self.player_O = QAgent(self.table, O, self, name='X')    # PrimalAgent(self.table, O)  QAgent(self.table, O, self, name='O')
+        self.player_X = QAgent(self.table, X, self, name='X', epsilon=1, to_cluster=0, stop_learning=1)     #  QAgent(self.table, X, self, name='X')    PrimalAgent(self.table, X)
+        self.player_O = QAgent(self.table, O, self, name='U', epsilon=0)    # PrimalAgent(self.table, O)  QAgent(self.table, O, self, name='O')
         self.players = [self.player_X, self.player_O]
         self.winner = None
         self.move_counter = 0
@@ -316,9 +355,8 @@ class Game:
         print(f'WinO {self.win_O_counter}')
         
         for player in self.players:
-            if player.__class__ is QAgent and f'{player.name}_q_table' in globals():
+            if player.__class__ is QAgent:
                 player.save_q_table()
-                del globals()[f'{player.name}_q_table']
         
     def cicle(self):
         if SHOW_GAME:
@@ -337,7 +375,8 @@ class Game:
             else:
                 continue
             break
-        self.update_q_tables()
+        if not STOP_LEARNING:
+            self.update_q_tables()
         self.game_over()
         
     def game_over(self):
@@ -413,6 +452,4 @@ class Game:
 
 game = Game()
 game.play()
-    
-
          
