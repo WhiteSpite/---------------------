@@ -17,10 +17,6 @@ from sklearn.cluster import KMeans
 
 # print("Labels:", list(kmeans.cluster_centers_.squeeze()))
 # print("Labels:", idx)
-
-a = []
-
-a.append(1/
-         2)
+a = 2 % 2
 
 print(a)

@@ -11,7 +11,7 @@ GRID_SIZE = GRID_WIDTH * GRID_HEIGHT
 X = 'X'
 O = 'O'
 EMPTY = '_'
-NUMBER_OF_GAMES = 100000
+NUMBER_OF_GAMES = 10000
 BASE_WIN_COUNTER = 1
 BASE_LOSS_COUNTER = 1
 BASE_DRAW_COUNTER = 1
@@ -25,7 +25,7 @@ LOSS_REWARD = -3
 DRAW_REWARD = -2
 SHOW_GAME = 0
 STOP_LEARNING = 1
-TO_CLUSTER = 1
+TO_CLUSTER = 0
 #O
 
 class Table:
@@ -167,19 +167,14 @@ class QAgent(PrimalAgent):
         if  self.stop_learning and self.to_cluster:
             new_Q = []
             all_actions = []
-            n_clasters = 28
-            
-            
-            import math
-            
-            
+            n_clasters = 50
             for hash in self.q_table:
                 if type(self.q_table[hash]) is not bool:
                     for action in self.q_table[hash]:
                         all_actions.append(self.q_table[hash][action])
                         new_Q.append((self.q_table[hash][action]['win'] -
-                                      self.q_table[hash][action]['draw']/8) -
-                                      self.q_table[hash][action]['loss'])
+                                      self.q_table[hash][action]['draw']*1) -
+                                      self.q_table[hash][action]['loss']*6)
             print(len(set(new_Q)))
             X = np.array(new_Q).reshape(-1, 1)
             kmeans = KMeans(n_clusters=n_clasters).fit(X)
@@ -207,7 +202,7 @@ class QAgent(PrimalAgent):
     def update_q_table(self, result):
         for action in self.actions:
             action[result] += 1
-            action['Q'] = action['win'] - (action['loss']**2)
+            action['Q'] = action['win'] - action['draw'] -  action['loss']**2
             action['w/d'] = action['win'] // action['draw']
         
     def step(self, state):
@@ -331,9 +326,9 @@ class QAgent(PrimalAgent):
    
 class Game:
     def __init__(self):
-        self.table = Table()                                     #  RealPlayer(self.table, X)  RemoteAgent(self.table, X) 
-        self.player_X = QAgent(self.table, X, self, name='X', epsilon=1, to_cluster=0, stop_learning=1)     #  QAgent(self.table, X, self, name='X')    PrimalAgent(self.table, X)
-        self.player_O = QAgent(self.table, O, self, name='U', epsilon=0)    # PrimalAgent(self.table, O)  QAgent(self.table, O, self, name='O')
+        self.table = Table()                                     #  RealPlayer(self.table, X)  RemoteAgent(self.table, X) QAgent(self.table, X, self, name='X', epsilon=1, to_cluster=0, stop_learning=1)
+        self.player_X = PrimalAgent(self.table, X)     #  QAgent(self.table, X, self, name='X')    PrimalAgent(self.table, X)
+        self.player_O = QAgent(self.table, O, self, name='S', epsilon=0)    # PrimalAgent(self.table, O)  QAgent(self.table, O, self, name='O')
         self.players = [self.player_X, self.player_O]
         self.winner = None
         self.move_counter = 0
@@ -375,8 +370,7 @@ class Game:
             else:
                 continue
             break
-        if not STOP_LEARNING:
-            self.update_q_tables()
+        self.update_q_tables()
         self.game_over()
         
     def game_over(self):
@@ -394,7 +388,7 @@ class Game:
         
     def update_q_tables(self):
         for player in self.players:
-            if player.__class__ is QAgent:
+            if player.__class__ is QAgent and not player.stop_learning:
                 if self.winner:
                     if self.winner is player:
                         result = 'win'

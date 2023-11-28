@@ -13,12 +13,10 @@ def find_group_boundaries(array, num_groups=num_proups):
 
     labels = model.labels_
     clusters_num = len(set(labels))
-    # for i in labels:
-    #     print(i)
-    # exit()
-    # idx = np.argsort()
+    print(list(labels))
+    # idx = np.argsort(model.cluster_centers_.squeeze())
     # lut = np.zeros_like(idx)
-    # lut[idx] = np.arange(num_groups)
+    # lut[idx] = np.arange(clusters_num)
     # labels = lut[labels]
     
     
@@ -34,9 +32,8 @@ for hash in q_table:
         for action in q_table[hash]:
             # array.append(q_table[hash][action]['win'] / (q_table[hash][action]['draw'] + q_table[hash][action]['loss']))
             array.append((q_table[hash][action]['win'] - q_table[hash][action]['draw']/8) - q_table[hash][action]['loss'])
-
-# Пример использования
-
+            
+array = np.array([1000, 20000,2,3,4])    
 labels, clasters_num = find_group_boundaries(array)
 print(clasters_num)
 lists = [[] for i in range(clasters_num)]
@@ -48,10 +45,12 @@ y_values = [0 for i in range(len(array))]
 
 colors = []
 for i in range(clasters_num//2):
-    colors.extend(["red", "blue", "green"])
+    colors.extend(["red", "blue", "green", "yellow", "purple", "orange", "pink"])
 
 for list in lists:
     plt.scatter([list], [0 for i in range(len(list))], s=0.5, c=colors[lists.index(list)])
+    for i in list:
+        plt.text(0, 0, f'Point')
 
 
 # Добавление меток к осям
@@ -60,6 +59,6 @@ plt.ylabel('Y')
 
 # Добавление заголовка графика
 plt.title('Точечный график')
-
+plt.legend()
 # Показать график
 plt.show()
