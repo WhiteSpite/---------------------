@@ -2,6 +2,8 @@ import numpy as np
 from os import listdir
 from flask import Flask, request, jsonify
 import pickle
+from sklearn.cluster import KMeans
+
 
 GRID_WIDTH = 3  # Не менять
 GRID_HEIGHT = 3  # Не менять
@@ -9,17 +11,21 @@ GRID_SIZE = GRID_WIDTH * GRID_HEIGHT
 X = 'X'
 O = 'O'
 EMPTY = '_'
-NUMBER_OF_GAMES = 100000
-BASE_Q = 1
+NUMBER_OF_GAMES = 10
+BASE_WIN_COUNTER = 1
+BASE_LOSS_COUNTER = 1
+BASE_DRAW_COUNTER = 1
+BASE_Q = 2
 EPSILON = 0
-GAMMA = 0.9
-ALPHA = 0.001
-STEP_REWARD = 0
+GAMMA = 1
+ALPHA = 1
+ALPHA_DIVIDER = 0
 WIN_REWARD = 1
-LOSE_REWARD = -1
+LOSS_REWARD = -1
 DRAW_REWARD = 0
-POLICY = 'egreedy' # 'egreedy' or 'greedy'
 SHOW_GAME = 0
+STOP_LEARNING = 1
+TO_CLUSTER = 0
 
 
 class Table:
@@ -46,6 +52,10 @@ class Table:
         empty_cells = np.array([cell for cell in self.grid.ravel() if cell.type == EMPTY])
         return empty_cells
     
+    def get_state(self):
+        state = np.array([[cell.type for cell in row] for row in self.grid])
+        return state
+    
     def get_X_cells(self):
         empty_cells = np.array([cell for cell in self.grid.ravel() if cell.type == X])
         return empty_cells
@@ -53,10 +63,12 @@ class Table:
     def get_O_cells(self):
         empty_cells = np.array([cell for cell in self.grid.ravel() if cell.type == O])
         return empty_cells
-    
-    def get_state(self):
-        state = np.array([[cell.type for cell in row] for row in self.grid])
-        return state
+                
+    def get_step_coords(self, state):
+        for y, row in enumerate(state):
+            for x, type in enumerate(row):
+                if type != self.grid[y][x].type:
+                    return x, y
                
     @staticmethod  
     def get_position_type(x, y):
@@ -81,9 +93,10 @@ class Cell:
 class PrimalAgent:
     '''Random move playing'''
     
-    def __init__(self, table, char):
+    def __init__(self, table, char, name='noname'):
         self.table = table
         self.char = char 
+        self.name = name
         self.last_cell = None
         
     def move(self):
@@ -92,98 +105,119 @@ class PrimalAgent:
         self.table.grid[target_cell.y][target_cell.x].type = self.char
         self.last_cell = target_cell
         
+ 
+class RealPlayer:
+    def __init__(self, table, char):
+        self.char = char
+        self.table = table
+        self.last_cell = None
+    
+    def move(self):
+        coords = input('Введите координаты в формате XY:\n\n')
+        print()
+        x = int(coords[0]) - 1
+        y = int(coords[1]) - 1
+        cell = self.table.grid[y][x]
+        cell.type = self.char
+        self.last_cell = cell
         
+
 class QAgent(PrimalAgent):
     '''Q learning agent'''
 
-    def __init__(self, table, char, game, name='noname', epsilon=EPSILON, alpha=ALPHA, gamma=GAMMA, 
-                 step_reward=STEP_REWARD, win_reward=WIN_REWARD, lose_reward=LOSE_REWARD, 
-                 draw_reward=DRAW_REWARD, policy=POLICY):
-        super().__init__(table, char)
+    def __init__(self, table, char, game, name='noname', epsilon=EPSILON, win_reward=WIN_REWARD, loss_reward=LOSS_REWARD, 
+                 draw_reward=DRAW_REWARD, stop_learning=STOP_LEARNING, alpha=ALPHA, alpha_divider=ALPHA_DIVIDER, gamma=GAMMA):
+        super().__init__(table, char, name)
         self.game = game
-        self.name = name
         self.epsilon = epsilon
         self.alpha = alpha
+        self.alpha_divider = alpha_divider
         self.gamma = gamma
-        self.step_reward = step_reward
         self.win_reward = win_reward
-        self.lose_reward = lose_reward
-        self.drow_reward = draw_reward
-        self.policy = policy
-        self.last_state_hash = None
-        self.last_action_hash = None
-        self.last_Q_max = None
-        if f'{self.name}_q_table.pkl' in listdir():
+        self.loss_reward = loss_reward
+        self.draw_reward = draw_reward
+        self.base_Q = BASE_Q
+        self.stop_learning = stop_learning
+        self.actions = []
+        self._init_q_table()
+        
+        
+    def _init_q_table(self):
+        if f'{self.name}_q_table' in globals():
+            self.q_table = globals()[f'{self.name}_q_table']
+        elif f'{self.name}_q_table.pkl' in listdir():
             with open(f'{self.name}_q_table.pkl', 'rb') as f:
                 self.q_table = pickle.load(f)
+            globals()[f'{self.name}_q_table'] = self.q_table
         else:
-            self.q_table = dict()
+            self.q_table = {'clustered': False}
+            globals()[f'{self.name}_q_table'] = self.q_table  
         
     def move(self):
         state = self.table.get_state()
-        state = self.mirror_state_by_char(state)
-        action_x, action_y, Q_max, state_hash, dirty_action_hash = self.step(state)
-        self.table.grid[action_y][action_x].type = self.char
         if self.char == O:
-            if self.game.is_win(action_x, action_y):
-                self.game.winner = self
-                reward = self.win_reward
-            elif not len(self.table.get_empty_cells()) > 0:
-                reward = self.drow_reward
-            else:
-                reward = self.step_reward
-            self.game.need_check_win = False
-            self.update_q_table(state_hash, dirty_action_hash, reward, Q_max)
-        elif self.char == X:
-            if self.game.is_win(action_x, action_y):
-                self.game.winner = self
-                reward = self.lose_reward
-                self.game.player_2.update_q_table(self.game.player_2.last_state_hash, self.game.player_2.last_action_hash, reward, self.game.player_2.last_Q_max)
-            elif not len(self.table.get_empty_cells()) > 0:
-                reward = self.drow_reward
-                self.game.player_2.update_q_table(self.game.player_2.last_state_hash, self.game.player_2.last_action_hash, reward, self.game.player_2.last_Q_max)
+            state = self.mirror_state(state)
+        action_x, action_y = self.step(state)
+        self.table.grid[action_y][action_x].type = self.char
+        self.last_cell = self.table.grid[action_y][action_x]
         
-        
-    def update_q_table(self, state_hash, action_hash, reward, Q_max):
-        td_target = reward + self.gamma * Q_max
-        td_error = td_target - self.q_table[state_hash][action_hash]
-        self.q_table[state_hash][action_hash] += self.alpha * td_error
-        self.last_state_hash = state_hash
-        self.last_action_hash = action_hash
-        self.last_Q_max = Q_max
+    def update_q_table(self, result):
+        reward = self.__dict__[f'{result}_reward']
+        for action in self.actions:
+            if action['alpha'] > 0:
+                td_error = reward - action['Q']
+                # print('-', action['Q'])
+                action['Q'] += td_error * action['alpha']
+                # print('---', reward, td_error, action['Q'])
+                action['alpha'] -= self.alpha_divider
+        self.actions = []
         
     def step(self, state):
         def get_coords(action_state):
             for y in range(self.table.height):
                 for x in range(self.table.width):
                     if action_state[y][x] == '.':
-                        return x, y
+                        return x, y 
             
-        action_state, Q_max, hash, dirty_action_hash = self.get_action(state)
-        action_x, action_y = get_coords(action_state)
-        return action_x, action_y, Q_max, hash, dirty_action_hash
-            
+        action_state = self.get_action(state)
+        action_x, action_y = get_coords(action_state)        
+        return action_x, action_y
+    
+    def get_state_by_action_state(self, action_state):
+        for y in range(self.table.height):
+            for x in range(self.table.width):
+                if action_state[y][x] == '.':
+                    action_state[y][x] == X
+                    return action_state
+    
     def get_action(self, state):
-        hash, num = self.find_state_in_q_table(state)
-        if not hash:
-            hash = self.add_hash_to_q_table(state)
-        if self.policy == 'greedy':
-            dirty_action_hash = max(self.q_table[hash], key=self.q_table[hash].get)
-        elif self.policy == 'egreedy':
-            if np.random.random() < self.epsilon:
-                dirty_action_hash = np.random.choice(list(self.q_table[hash].keys()))
+        dirty_state_hash, num = self.find_or_create_state_in_q_table(state)
+        self.last_dirty_state_hash = dirty_state_hash
+        if np.random.random() < self.epsilon:
+            dirty_action_hash = np.random.choice(list(self.q_table[dirty_state_hash].keys()))
+        else:
+            if self.q_table['clustered']:
+                Q = 'clustered_Q'
             else:
-                dirty_action_hash = max(self.q_table[hash], key=self.q_table[hash].get)
-        Q_max = self.q_table[hash][dirty_action_hash]
+                Q = 'Q'
+            max_q = max([self.q_table[dirty_state_hash][action][Q] for action in self.q_table[dirty_state_hash]])
+            dirty_action_hash = np.random.choice([action for action in self.q_table[dirty_state_hash] \
+                if self.q_table[dirty_state_hash][action][Q] == max_q])
+        if SHOW_GAME:
+            print(self.q_table[dirty_state_hash])
+            print(self.q_table[dirty_state_hash][dirty_action_hash])
+        # print(Q_max)
+        self.actions.append(self.q_table[dirty_state_hash][dirty_action_hash])
         action_state = self.reverse_hash_and_get_state(dirty_action_hash, num)
-        return action_state, Q_max, hash, dirty_action_hash
+        return action_state
         
-    def find_state_in_q_table(self, state):
+    def find_or_create_state_in_q_table(self, state):
         for num, similar_state in enumerate(self.similar_states_generator(state.copy())):
             hash = self.get_hash(similar_state)
             if hash in self.q_table:
+                similar_state
                 return hash, num
-        return None, 0
+        return self.add_hash_to_q_table(state), 0
          
     def add_hash_to_q_table(self, state):  
         hash = self.get_hash(state)  
@@ -196,7 +230,8 @@ class QAgent(PrimalAgent):
             for key, type in enumerate(row):
                 if type == EMPTY:
                     row[key] = '.'
-                    actions[self.get_hash(state)] = BASE_Q
+                    actions[self.get_hash(state)] = {'alpha': self.alpha,
+                                                     'Q': self.base_Q}
                     row[key] = EMPTY
         return actions
     
@@ -211,12 +246,12 @@ class QAgent(PrimalAgent):
         return state
     
     def save_q_table(self):
-        with open(f'{self.name}_q_table.pkl', 'wb') as f:
-            pickle.dump(self.q_table, f)
-            
-    def mirror_state_by_char(self, state):
-        if self.char == X:
-            return state
+        if f'{self.name}_q_table' in globals() and (self.to_cluster or not self.stop_learning):
+            with open(f'{self.name}_q_table.pkl', 'wb') as f:
+                pickle.dump(self.q_table, f)
+            del globals()[f'{self.name}_q_table']
+        
+    def mirror_state(self, state):
         for row in state:
             for key, type in enumerate(row):
                 if type == X:
@@ -227,6 +262,7 @@ class QAgent(PrimalAgent):
     
     @staticmethod
     def get_state_from_hash(hash):
+        # print(hash)
         state = np.array(list(hash)).reshape(GRID_WIDTH, GRID_HEIGHT)
         return state
     
@@ -243,14 +279,69 @@ class QAgent(PrimalAgent):
             else:
                 state = np.rot90(state)
             yield state
+            
+
+class MeanQAgent(QAgent):
+    def __init__(self, table, char, game, name='noname', epsilon=EPSILON, win_reward=WIN_REWARD, loss_reward=LOSS_REWARD, 
+                 draw_reward=DRAW_REWARD, stop_learning=STOP_LEARNING, base_win_counter=BASE_WIN_COUNTER, 
+                 base_loss_counter=BASE_LOSS_COUNTER, base_draw_counter=BASE_DRAW_COUNTER, to_cluster=TO_CLUSTER):
+        super().__init__(table, char, game, name, epsilon, win_reward, loss_reward, draw_reward, stop_learning)
+        self.base_win_counter = base_win_counter
+        self.base_loss_counter = base_loss_counter
+        self.base_draw_counter = base_draw_counter
+        self.to_cluster = to_cluster
+        self._cluster_q_table()
+    
+    def _cluster_q_table(self):
+        if self.stop_learning and self.to_cluster:
+            new_Q = []
+            all_actions = []
+            n_clasters = 20
+            for hash in self.q_table:
+                if type(self.q_table[hash]) is not bool:
+                    for action in self.q_table[hash]:
+                        all_actions.append(self.q_table[hash][action])
+                        new_Q.append(self.q_table[hash][action]['Q'])
+            X = np.array(new_Q).reshape(-1, 1)
+            kmeans = KMeans(n_clusters=n_clasters).fit(X)
+            labels = kmeans.labels_
+            indexes = np.argsort(kmeans.cluster_centers_.squeeze())
+            lookup_table = np.zeros_like(indexes)
+            lookup_table[indexes] = np.arange(n_clasters)
+            ordered_labels = lookup_table[labels]
+            for action, label in zip(all_actions, ordered_labels):
+                action['clustered_Q'] = label
+            self.q_table['clustered'] = True 
+    
+    def update_q_table(self, result):
+        for action in self.actions:
+            action[result] += 1
+            action['Q'] = (action['win'] * self.win_reward \
+                         + action['loss'] * self.loss_reward \
+                         + action['draw'] * self.draw_reward) \
+                         / (action['win'] + action['loss'] + action['draw'])
+        self.actions = []
         
-   
+    def get_actions(self, state):
+        actions = {}
+        for row in state:
+            for key, type in enumerate(row):
+                if type == EMPTY:
+                    row[key] = '.'
+                    actions[self.get_hash(state)] = {'win': self.base_win_counter,
+                                                     'loss': self.base_loss_counter,
+                                                     'draw': self.base_draw_counter,
+                                                     'Q': self.base_Q}
+                    row[key] = EMPTY
+        return actions
+        
+    
 class Game:
     def __init__(self, state):
-        self.table = Table(state)                                      #  RealPlayer(self.table, X)
-        self.player_1 = QAgent(self.table, X, self, name='O')    #  QAgent(self.table, X, self, name='X')    PrimalAgent(self.table, X)
-        self.player_2 = QAgent(self.table, O, self, name='O')  # PrimalAgent(self.table, O)  QAgent(self.table, O, self, name='O')
-        self.players = [self.player_1, self.player_2]
+        self.table = Table(state)                                     #  RealPlayer(self.table, X)  RemoteAgent(self.table, X) QAgent(self.table, X, self, name='X', epsilon=1, to_cluster=0, stop_learning=1)
+        self.player_X = PrimalAgent(self.table, X)     #  QAgent(self.table, X, self, name='X')    PrimalAgent(self.table, X)
+        self.player_O = MeanQAgent(self.table, O, self, name='L', epsilon=0)    # PrimalAgent(self.table, O)  QAgent(self.table, O, self, name='O')
+        self.players = [self.player_X, self.player_O]
         self.winner = None
         self.move_counter = 0
         self.drow_counter = 0
@@ -265,47 +356,60 @@ class Game:
             self.winner = None
             self.players = self.players[::-1]
             self.move_counter = 0
+            
+        print(f'Draw {self.drow_counter}')
+        print(f'WinX {self.win_X_counter}')
+        print(f'WinO {self.win_O_counter}')
         
         for player in self.players:
-            if player.__class__ is QAgent:
+            if QAgent in player.__class__.mro():
                 player.save_q_table()
         
     def cicle(self):
+        if SHOW_GAME:
+            print(self.table)
         while True:
             for player in self.players:
                 self.move_counter += 1
                 player.move()
-                if self.need_check_win:
-                    if self.is_win(player.last_cell.x, player.last_cell.y):
-                        self.winner = player
-                        break
-                else:
-                    self.need_check_win = True
-                    if self.winner:
-                        break
-                if not self.table.get_empty_cells():
+                if SHOW_GAME:
+                    print(self.table)
+                if self.is_win(player.last_cell.x, player.last_cell.y):
+                    self.winner = player
+                    break
+                if self.move_counter == GRID_SIZE:
                     break
             else:
                 continue
             break
+        self.update_q_tables()
+        self.game_over()
+        
+    def game_over(self):
         if self.winner:
-            if self.winner is self.player_1:
+            if SHOW_GAME:
+                print(f'Winner is {self.winner.char}\n')
+            if self.winner is self.player_X:
                 self.win_X_counter += 1
-                if self.player_2.__class__ is QAgent:
-                    self.player_2.update_q_table(self.player_2.last_state_hash, self.player_2.last_action_hash, 
-                                                 self.player_2.lose_reward, self.player_2.last_Q_max)
             else:
                 self.win_O_counter += 1
-                if self.player_1.__class__ is QAgent:
-                    self.player_1.update_q_table(self.player_1.last_state_hash, self.player_1.last_action_hash, 
-                                                 self.player_1.lose_reward, self.player_1.last_Q_max)
         else:
+            if SHOW_GAME:
+                print('Draw\n')
             self.drow_counter += 1
-            for player in self.players:
-                if player.__class__ is QAgent:
-                    player.update_q_table(player.last_state_hash, player.last_action_hash, 
-                                                 player.drow_reward, player.last_Q_max)
-            
+        
+    def update_q_tables(self):
+        for player in self.players:
+            if QAgent in player.__class__.mro() and not player.stop_learning:
+                if self.winner:
+                    if self.winner is player:
+                        result = 'win'
+                    else:
+                        result = 'loss'
+                else:
+                    result = 'draw'
+                player.update_q_table(result=result)
+        
     def is_win(self, x, y):
         def win_by_row(self, y):
             row = set([self.table.grid[y][x].type for x in range(self.table.width)])
@@ -331,7 +435,8 @@ class Game:
             win = win_by_top_down_diag(self) or win_by_down_top_diag(self)
             return win
         
-        
+        if self.move_counter < 5:
+            return False
         if win_by_row(self, y) or win_by_col(self, x):
             return True
         position_type = self.table.get_position_type(x, y)
@@ -354,7 +459,6 @@ app = Flask(__name__)
 @app.route('/api', methods=['POST'])
 def api_endpoint():
     try:
-        # Получаем JSON из запроса
         state = np.array(request.get_json())
         game = Game(state)
         count_O = len(game.table.get_O_cells())
@@ -363,20 +467,14 @@ def api_endpoint():
             return jsonify({"error": "Impossible state received. Too many 'O' cells"}), 500
         elif count_X - count_O > 1:
             return jsonify({"error": "Impossible state received. Too many 'X' cells"}), 500  
-        game.player_2.move()
+        game.player_O.move()
         state = game.table.get_state().tolist()
-        if not game.winner and len(game.table.get_empty_cells()) > 0:
-            game.player_1.move()
-        game.player_2.save_q_table()
 
-        # Отправляем JSON в ответ
         return jsonify(state)
 
     except Exception as e:
-        # В случае ошибки возвращаем JSON с сообщением об ошибке
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    # Запускаем Flask приложение
     app.run(debug=True, host='0.0.0.0', port=5000)
     

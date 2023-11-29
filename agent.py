@@ -1,9 +1,10 @@
-import numpy as np
 from os import listdir
+from sklearn.cluster import KMeans
+import numpy as np
 import pickle
 import requests
 import json
-from sklearn.cluster import KMeans
+
 
 GRID_WIDTH = 3  # Не менять
 GRID_HEIGHT = 3  # Не менять
@@ -15,18 +16,17 @@ NUMBER_OF_GAMES = 10000
 BASE_WIN_COUNTER = 1
 BASE_LOSS_COUNTER = 1
 BASE_DRAW_COUNTER = 1
-BASE_Q = 0
+BASE_Q = 2
 EPSILON = 0
-GAMMA = 1
 ALPHA = 1
-STEP_REWARD = -0.1
-WIN_REWARD = 5
-LOSS_REWARD = -3
-DRAW_REWARD = -2
+ALPHA_DIVIDER = 1
+WIN_REWARD = 1
+LOSS_REWARD = -1
+DRAW_REWARD = 0
 SHOW_GAME = 0
 STOP_LEARNING = 1
 TO_CLUSTER = 0
-#O
+
 
 class Table:
     def __init__(self):
@@ -53,7 +53,7 @@ class Table:
         state = np.array([[cell.type for cell in row] for row in self.grid])
         return state
                 
-    def get_step_coords(self, state):
+    def get_action_coords(self, state):
         for y, row in enumerate(state):
             for x, type in enumerate(row):
                 if type != self.grid[y][x].type:
@@ -108,7 +108,7 @@ class RemoteAgent(PrimalAgent):
         except requests.RequestException as e:
             print(f"An error occurred: {e}")
         state = np.array(json.loads(response.text))
-        x, y = self.table.get_step_coords(state)
+        x, y = self.table.get_action_coords(state)
         self.table.grid[y][x].type = self.char
         self.last_cell = self.table.grid[y][x]
  
@@ -128,68 +128,35 @@ class RealPlayer:
         cell.type = self.char
         self.last_cell = cell
         
-        
+                    
 class QAgent(PrimalAgent):
     '''Q learning agent'''
 
-    def __init__(self, table, char, game, name='noname', epsilon=EPSILON, alpha=ALPHA, gamma=GAMMA, 
-                 step_reward=STEP_REWARD, win_reward=WIN_REWARD, loss_reward=LOSS_REWARD, 
-                 draw_reward=DRAW_REWARD, base_win_counter=BASE_WIN_COUNTER, base_loss_counter=BASE_LOSS_COUNTER, 
-                 base_draw_counter=BASE_DRAW_COUNTER, stop_learning=STOP_LEARNING, to_cluster=TO_CLUSTER):
+    def __init__(self, table, char, game, name='noname', epsilon=EPSILON, win_reward=WIN_REWARD, loss_reward=LOSS_REWARD, 
+                 draw_reward=DRAW_REWARD, stop_learning=STOP_LEARNING, alpha=ALPHA, alpha_divider=ALPHA_DIVIDER):
         super().__init__(table, char, name)
         self.game = game
         self.epsilon = epsilon
         self.alpha = alpha
-        self.gamma = gamma
-        self.step_reward = step_reward
+        self.alpha_divider = alpha_divider
         self.win_reward = win_reward
         self.loss_reward = loss_reward
-        self.drow_reward = draw_reward
-        self.base_win_counter = base_win_counter
-        self.base_loss_counter = base_loss_counter
-        self.base_draw_counter = base_draw_counter
-        self.base_Q = base_win_counter - base_loss_counter
+        self.draw_reward = draw_reward
+        self.base_Q = BASE_Q
         self.stop_learning = stop_learning
-        self.to_cluster = to_cluster
         self.actions = []
-        # get q_table
+        self._init_q_table()
+        
+    def _init_q_table(self):
         if f'{self.name}_q_table' in globals():
             self.q_table = globals()[f'{self.name}_q_table']
         elif f'{self.name}_q_table.pkl' in listdir():
             with open(f'{self.name}_q_table.pkl', 'rb') as f:
                 self.q_table = pickle.load(f)
             globals()[f'{self.name}_q_table'] = self.q_table
-            # self.q_table['clustered'] = False
         else:
             self.q_table = {'clustered': False}
-            globals()[f'{self.name}_q_table'] = self.q_table
-        # cluster q_table
-        if  self.stop_learning and self.to_cluster:
-            new_Q = []
-            all_actions = []
-            n_clasters = 50
-            for hash in self.q_table:
-                if type(self.q_table[hash]) is not bool:
-                    for action in self.q_table[hash]:
-                        all_actions.append(self.q_table[hash][action])
-                        new_Q.append((self.q_table[hash][action]['win'] -
-                                      self.q_table[hash][action]['draw']*1) -
-                                      self.q_table[hash][action]['loss']*6)
-            print(len(set(new_Q)))
-            X = np.array(new_Q).reshape(-1, 1)
-            kmeans = KMeans(n_clusters=n_clasters).fit(X)
-            labels = kmeans.labels_
-            for i in labels:
-                print(i)
-            indexes = np.argsort(kmeans.cluster_centers_.squeeze())
-            lookup_table = np.zeros_like(indexes)
-            lookup_table[indexes] = np.arange(n_clasters)
-            ordered_labels = lookup_table[labels]
-            for action, label in zip(all_actions, ordered_labels):
-                action['Q'] = label
-            self.q_table['clustered'] = True
-              
-        print(len(self.q_table))
+            globals()[f'{self.name}_q_table'] = self.q_table  
         
     def move(self):
         state = self.table.get_state()
@@ -200,10 +167,13 @@ class QAgent(PrimalAgent):
         self.last_cell = self.table.grid[action_y][action_x]
         
     def update_q_table(self, result):
+        reward = self.__dict__[f'{result}_reward']
         for action in self.actions:
-            action[result] += 1
-            action['Q'] = action['win'] - action['draw'] -  action['loss']**2
-            action['w/d'] = action['win'] // action['draw']
+            if action['alpha'] > 0:
+                td_error = reward - action['Q']
+                action['Q'] += td_error * action['alpha']
+                action['alpha'] /= self.alpha_divider
+        self.actions = []
         
     def step(self, state):
         def get_coords(action_state):
@@ -216,34 +186,19 @@ class QAgent(PrimalAgent):
         action_x, action_y = get_coords(action_state)        
         return action_x, action_y
     
-    def get_Q_max(self):
-        if self.game.move_counter == 9:
-            return BASE_Q
-        state = self.table.get_state()
-        hash, num = self.find_or_create_state_in_q_table(state)
-        # print(hash)
-        Q_max = max(self.q_table[hash].values())
-        return Q_max
-    
-    def get_state_by_action_state(self, action_state):
-        for y in range(self.table.height):
-            for x in range(self.table.width):
-                if action_state[y][x] == '.':
-                    action_state[y][x] == X
-                    return action_state
-    
     def get_action(self, state):
         dirty_state_hash, num = self.find_or_create_state_in_q_table(state)
         self.last_dirty_state_hash = dirty_state_hash
         if np.random.random() < self.epsilon:
             dirty_action_hash = np.random.choice(list(self.q_table[dirty_state_hash].keys()))
         else:
-            max_q = max([self.q_table[dirty_state_hash][action]['Q'] for action in self.q_table[dirty_state_hash]])
+            if self.q_table['clustered']:
+                Q = 'clustered_Q'
+            else:
+                Q = 'Q'
+            max_q = max([self.q_table[dirty_state_hash][action][Q] for action in self.q_table[dirty_state_hash]])
             dirty_action_hash = np.random.choice([action for action in self.q_table[dirty_state_hash] \
-                if self.q_table[dirty_state_hash][action]['Q'] == max_q])
-        if SHOW_GAME:
-                print(self.q_table[dirty_state_hash])
-        # print(Q_max)
+                if self.q_table[dirty_state_hash][action][Q] == max_q])
         self.actions.append(self.q_table[dirty_state_hash][dirty_action_hash])
         action_state = self.reverse_hash_and_get_state(dirty_action_hash, num)
         return action_state
@@ -267,15 +222,9 @@ class QAgent(PrimalAgent):
             for key, type in enumerate(row):
                 if type == EMPTY:
                     row[key] = '.'
-                    actions[self.get_hash(state)] = {'win': self.base_win_counter, 
-                                                     'loss': self.base_loss_counter, 
-                                                     'draw': self.base_draw_counter,
-                                                     'w/d': self.base_win_counter / self.base_draw_counter,
+                    actions[self.get_hash(state)] = {'alpha': self.alpha,
                                                      'Q': self.base_Q}
                     row[key] = EMPTY
-        if not actions:
-            actions['end'] = BASE_Q
-            
         return actions
     
     def reverse_hash_and_get_state(self, hash, num):
@@ -289,7 +238,7 @@ class QAgent(PrimalAgent):
         return state
     
     def save_q_table(self):
-        if f'{self.name}_q_table' in globals() and (self.to_cluster or not self.stop_learning):
+        if f'{self.name}_q_table' in globals() and not self.stop_learning:
             with open(f'{self.name}_q_table.pkl', 'wb') as f:
                 pickle.dump(self.q_table, f)
             del globals()[f'{self.name}_q_table']
@@ -305,7 +254,6 @@ class QAgent(PrimalAgent):
     
     @staticmethod
     def get_state_from_hash(hash):
-        # print(hash)
         state = np.array(list(hash)).reshape(GRID_WIDTH, GRID_HEIGHT)
         return state
     
@@ -322,13 +270,76 @@ class QAgent(PrimalAgent):
             else:
                 state = np.rot90(state)
             yield state
+            
+
+class MeanQAgent(QAgent):
+    '''Arithmetic mean (wins, losses, draws) learning agent'''
+    
+    def __init__(self, table, char, game, name='noname', epsilon=EPSILON, win_reward=WIN_REWARD, loss_reward=LOSS_REWARD, 
+                 draw_reward=DRAW_REWARD, stop_learning=STOP_LEARNING, base_win_counter=BASE_WIN_COUNTER, 
+                 base_loss_counter=BASE_LOSS_COUNTER, base_draw_counter=BASE_DRAW_COUNTER, to_cluster=TO_CLUSTER):
+        super().__init__(table, char, game, name, epsilon, win_reward, loss_reward, draw_reward, stop_learning)
+        self.base_win_counter = base_win_counter
+        self.base_loss_counter = base_loss_counter
+        self.base_draw_counter = base_draw_counter
+        self.to_cluster = to_cluster
+        self._cluster_q_table()
+    
+    def _cluster_q_table(self):
+        if self.stop_learning and self.to_cluster:
+            new_Q = []
+            all_actions = []
+            n_clasters = 20
+            for hash in self.q_table:
+                if type(self.q_table[hash]) is not bool:
+                    for action in self.q_table[hash]:
+                        all_actions.append(self.q_table[hash][action])
+                        new_Q.append(self.q_table[hash][action]['Q'])
+            X = np.array(new_Q).reshape(-1, 1)
+            kmeans = KMeans(n_clusters=n_clasters).fit(X)
+            labels = kmeans.labels_
+            indexes = np.argsort(kmeans.cluster_centers_.squeeze())
+            lookup_table = np.zeros_like(indexes)
+            lookup_table[indexes] = np.arange(n_clasters)
+            ordered_labels = lookup_table[labels]
+            for action, label in zip(all_actions, ordered_labels):
+                action['clustered_Q'] = label
+            self.q_table['clustered'] = True 
+    
+    def update_q_table(self, result):
+        for action in self.actions:
+            action[result] += 1
+            action['Q'] = (action['win'] * self.win_reward \
+                         + action['loss'] * self.loss_reward \
+                         + action['draw'] * self.draw_reward) \
+                         / (action['win'] + action['loss'] + action['draw'])
+        self.actions = []
         
-   
+    def get_actions(self, state):
+        actions = {}
+        for row in state:
+            for key, type in enumerate(row):
+                if type == EMPTY:
+                    row[key] = '.'
+                    actions[self.get_hash(state)] = {'win': self.base_win_counter,
+                                                     'loss': self.base_loss_counter,
+                                                     'draw': self.base_draw_counter,
+                                                     'Q': self.base_Q}
+                    row[key] = EMPTY
+        return actions
+    
+    def save_q_table(self):
+        if f'{self.name}_q_table' in globals() and (self.to_cluster or not self.stop_learning):
+            with open(f'{self.name}_q_table.pkl', 'wb') as f:
+                pickle.dump(self.q_table, f)
+            del globals()[f'{self.name}_q_table']
+        
+
 class Game:
     def __init__(self):
-        self.table = Table()                                     #  RealPlayer(self.table, X)  RemoteAgent(self.table, X) QAgent(self.table, X, self, name='X', epsilon=1, to_cluster=0, stop_learning=1)
-        self.player_X = PrimalAgent(self.table, X)     #  QAgent(self.table, X, self, name='X')    PrimalAgent(self.table, X)
-        self.player_O = QAgent(self.table, O, self, name='S', epsilon=0)    # PrimalAgent(self.table, O)  QAgent(self.table, O, self, name='O')
+        self.table = Table()
+        self.player_X = MeanQAgent(self.table, X, self, name='Mean', epsilon=0)
+        self.player_O = QAgent(self.table, O, self, name='Simple', epsilon=0)
         self.players = [self.player_X, self.player_O]
         self.winner = None
         self.move_counter = 0
@@ -350,7 +361,7 @@ class Game:
         print(f'WinO {self.win_O_counter}')
         
         for player in self.players:
-            if player.__class__ is QAgent:
+            if QAgent in player.__class__.mro():
                 player.save_q_table()
         
     def cicle(self):
@@ -388,7 +399,7 @@ class Game:
         
     def update_q_tables(self):
         for player in self.players:
-            if player.__class__ is QAgent and not player.stop_learning:
+            if QAgent in player.__class__.mro() and not player.stop_learning:
                 if self.winner:
                     if self.winner is player:
                         result = 'win'
@@ -397,7 +408,6 @@ class Game:
                 else:
                     result = 'draw'
                 player.update_q_table(result=result)
-                player.actions = []
         
     def is_win(self, x, y):
         def win_by_row(self, y):
@@ -442,8 +452,6 @@ class Game:
             return False
         
          
-    
-
 game = Game()
 game.play()
          
