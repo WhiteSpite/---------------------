@@ -16,7 +16,7 @@
 
 <h4>Принцип RL - уравнение Беллмана:</h4>
 
-![i2_ugxlinshqmsyzkawlbmirxri-fotor-2023113004810](https://github.com/WhiteSpite/TicTacToe-RL/assets/113059464/ffe4ad1a-c0fd-45fc-9d27-ceabe9da15f7)
+<img width="420" alt="Снимок экрана 2023-11-30 в 03 57 14" src="https://github.com/WhiteSpite/TicTacToe-RL/assets/113059464/b908afe9-6a69-4d8a-a245-88db96edf9c2">
 
 <h4>Основная проблема:</h4> 
 
