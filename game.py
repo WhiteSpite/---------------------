@@ -66,8 +66,8 @@ class Cell:
 class Game:
     def __init__(self):
         self.table = Table()
-        self.player_X = MeanQAgent(self.table, X, self, name='Mean', epsilon=1, stop_learning=1)
-        self.player_O = QAgent(self.table, O, self, name='S', epsilon=0, stop_learning=0)
+        self.player_X = QAgent(self.table, X, self, name='SimpleQ', epsilon=1, stop_learning=1)
+        self.player_O = MeanQAgent(self.table, O, self, name='Mean', epsilon=0, stop_learning=1, to_cluster=0)
         self.players = [self.player_X, self.player_O]
         self.winner = None
         self.move_counter = 0
