@@ -6,10 +6,12 @@ from agent import *
 
 NUMBER_OF_GAMES = 10000
 SHOW_GAME = 0
+CREATE_PLOT_DATA = 0
 
-dataWin = []
-dataLoss = []
-dataDraw = []
+if CREATE_PLOT_DATA:
+    dataWin = []
+    dataLoss = []
+    dataDraw = []
 
 
 class Table:
@@ -77,22 +79,24 @@ class Game:
         self.need_check_win = True
         
     def play(self):
-        counter = 0
-        global dataWin, dataLoss, dataDraw
+        if CREATE_PLOT_DATA:
+            counter = 0
+            global dataWin, dataLoss, dataDraw
         for _ in range(NUMBER_OF_GAMES):
             self.cicle()
             self.table.reset()
             self.winner = None
             self.players = self.players[::-1]
             self.move_counter = 0
-            counter += 1
-            if counter % 100 == 0:
-                dataWin.append(self.win_O_counter)
-                dataLoss.append(self.win_X_counter)
-                dataDraw.append(self.drow_counter)
-                self.win_X_counter = 0
-                self.win_O_counter = 0
-                self.drow_counter = 0
+            if CREATE_PLOT_DATA:
+                counter += 1
+                if counter % 100 == 0:
+                    dataWin.append(self.win_O_counter)
+                    dataLoss.append(self.win_X_counter)
+                    dataDraw.append(self.drow_counter)
+                    self.win_X_counter = 0
+                    self.win_O_counter = 0
+                    self.drow_counter = 0
             
         print(f'Draw {self.drow_counter}')
         print(f'WinX {self.win_X_counter}')
@@ -193,7 +197,7 @@ class Game:
 game = Game()
 game.play()
 
-dataS = [dataWin, dataLoss, dataDraw]
-
-with open(f'data_RL_vs_random.pkl', 'wb') as f:
-    pickle.dump(dataS, f)
+if CREATE_PLOT_DATA:
+    dataS = [dataWin, dataLoss, dataDraw]
+    with open(f'plot_data.pkl', 'wb') as f:
+        pickle.dump(dataS, f)

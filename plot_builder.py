@@ -4,7 +4,7 @@ from matplotlib.animation import FuncAnimation
 import pickle
 
 
-with open(f'data_RL_vs_random.pkl', 'rb') as f:
+with open(f'plot_data.pkl', 'rb') as f:
     data = pickle.load(f)
     
 data_win = data[0]
